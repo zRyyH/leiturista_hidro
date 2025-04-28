@@ -11,22 +11,43 @@ export default function AtualizarLeitura() {
     const router = useRouter();
     const [leitura, setLeitura] = useState(null);
     const [valorLeitura, setValorLeitura] = useState("");
+    const [observacao, setObservacao] = useState("");
     const [foto, setFoto] = useState(null);
     const [previewFoto, setPreviewFoto] = useState("");
     const [loading, setLoading] = useState(true);
     const [enviando, setEnviando] = useState(false);
     const [error, setError] = useState(null);
     const [success, setSuccess] = useState(false);
+    const [mounted, setMounted] = useState(false);
     const fileInputRef = useRef(null);
+
+    // Endpoints e estados das variáveis de ambiente
+    const directusUrl = process.env.NEXT_PUBLIC_DIRECTUS_URL;
+    const leiturasEndpoint = process.env.NEXT_PUBLIC_LEITURAS_UNIDADES_ENDPOINT;
+    const filesEndpoint = process.env.NEXT_PUBLIC_FILES_ENDPOINT;
+    const statusAnalise = process.env.NEXT_PUBLIC_STATUS_ANALISE;
+
+    useEffect(() => {
+        setMounted(true);
+    }, []);
 
     // Busca os dados da leitura atual
     useEffect(() => {
+        if (!mounted) return;
+
         const fetchLeitura = async () => {
             try {
-                const authToken = localStorage.getItem("authToken");
+                let authToken;
+                try {
+                    authToken = localStorage.getItem("authToken");
+                } catch (e) {
+                    console.error("Erro ao acessar localStorage:", e);
+                    setLoading(false);
+                    return;
+                }
 
                 const response = await axios.get(
-                    `https://hidro.awpsoft.com.br/items/leituras_unidades/${id}?fields=*,medidor_unidade_id.unidade_id.*`,
+                    `${directusUrl}${leiturasEndpoint}/${id}?fields=*,medidor_unidade_id.unidade_id.*,medidor_unidade_id.*`,
                     {
                         headers: {
                             Authorization: `Bearer ${authToken}`,
@@ -39,10 +60,7 @@ export default function AtualizarLeitura() {
                 setLoading(false);
             } catch (err) {
                 console.error("Erro ao buscar leitura:", err);
-                setError(
-                    err.response?.data?.errors?.[0]?.message ||
-                    "Erro ao carregar dados da leitura."
-                );
+                setError("Erro ao carregar dados da leitura.");
                 setLoading(false);
             }
         };
@@ -50,7 +68,7 @@ export default function AtualizarLeitura() {
         if (id) {
             fetchLeitura();
         }
-    }, [id]);
+    }, [id, mounted, directusUrl, leiturasEndpoint]);
 
     // Manipula a seleção de arquivo
     const handleFileChange = (e) => {
@@ -73,68 +91,15 @@ export default function AtualizarLeitura() {
         }
     };
 
-    // Função para fazer upload da foto
-    const uploadFoto = async () => {
-        if (!foto) return null;
+    // Formatar data no padrão brasileiro
+    const formatarData = (dataISO) => {
+        if (!dataISO) return "Data não disponível";
 
         try {
-            const authToken = localStorage.getItem("authToken");
-
-            const formData = new FormData();
-            formData.append("file", foto);
-
-            const response = await axios.post(
-                "https://hidro.awpsoft.com.br/files",
-                formData,
-                {
-                    headers: {
-                        Authorization: `Bearer ${authToken}`,
-                        "Content-Type": "multipart/form-data",
-                    },
-                }
-            );
-
-            return response.data.data.id;
-        } catch (err) {
-            console.error("Erro ao fazer upload da foto:", err);
-            throw new Error(
-                err.response?.data?.errors?.[0]?.message ||
-                "Erro ao fazer upload da foto."
-            );
-        }
-    };
-
-    // Função para atualizar a leitura
-    const atualizarLeitura = async (fotoId) => {
-        try {
-            const authToken = localStorage.getItem("authToken");
-
-            const dadosAtualizados = {
-                leitura: parseInt(valorLeitura),
-                foto_id: fotoId,
-                status: "concluido"
-            };
-
-            console.log("Dados atualizados:", dadosAtualizados);
-
-            await axios.patch(
-                `https://hidro.awpsoft.com.br/items/leituras_unidades/${id}`,
-                dadosAtualizados,
-                {
-                    headers: {
-                        Authorization: `Bearer ${authToken}`,
-                        "Content-Type": "application/json",
-                    },
-                }
-            );
-
-            return true;
-        } catch (err) {
-            console.error("Erro ao atualizar leitura:", err);
-            throw new Error(
-                err.response?.data?.errors?.[0]?.message ||
-                "Erro ao atualizar leitura."
-            );
+            const data = new Date(dataISO);
+            return data.toLocaleDateString('pt-BR');
+        } catch (e) {
+            return "Data inválida";
         }
     };
 
@@ -154,203 +119,257 @@ export default function AtualizarLeitura() {
                 throw new Error("É necessário enviar uma foto do medidor.");
             }
 
-            // Faz upload da foto
-            const fotoId = await uploadFoto();
+            // Obtém o token de autenticação
+            let authToken;
+            try {
+                authToken = localStorage.getItem("authToken");
+            } catch (e) {
+                console.error("Erro ao acessar localStorage:", e);
+                throw new Error("Erro de autenticação. Tente fazer login novamente.");
+            }
 
-            if (!fotoId) {
-                throw new Error("Erro ao processar a foto. Tente novamente.");
+            // Faz upload da foto
+            const formData = new FormData();
+            formData.append("file", foto);
+
+            const fotoResponse = await axios.post(
+                `${directusUrl}${filesEndpoint}`,
+                formData,
+                {
+                    headers: {
+                        Authorization: `Bearer ${authToken}`,
+                        "Content-Type": "multipart/form-data",
+                    },
+                }
+            );
+
+            const fotoId = fotoResponse.data.data.id;
+
+            // Dados para atualizar a leitura
+            const dadosAtualizados = {
+                leitura: parseInt(valorLeitura),
+                foto_id: fotoId,
+                status: statusAnalise,
+                data_leitura: new Date().toISOString(), // Data atual da leitura
+            };
+
+            // Adiciona observação se foi fornecida
+            if (observacao.trim()) {
+                dadosAtualizados.observacoes = observacao.trim();
             }
 
             // Atualiza a leitura com o ID da foto
-            const atualizado = await atualizarLeitura(fotoId);
+            await axios.patch(
+                `${directusUrl}${leiturasEndpoint}/${id}`,
+                dadosAtualizados,
+                {
+                    headers: {
+                        Authorization: `Bearer ${authToken}`,
+                        "Content-Type": "application/json",
+                    },
+                }
+            );
 
-            if (atualizado) {
-                setSuccess(true);
-                // Redireciona após 2 segundos
-                setTimeout(() => {
-                    router.push("/dashboard");
-                }, 2000);
-            }
+            setSuccess(true);
+            // Redireciona após 1.5 segundos
+            setTimeout(() => {
+                router.push("/dashboard");
+            }, 1500);
         } catch (err) {
-            setError(err.message);
+            setError(err.message || "Erro ao atualizar leitura.");
         } finally {
             setEnviando(false);
         }
     };
 
+    // Calcular consumo se houver leitura anterior
+    const calcularConsumo = () => {
+        if (!leitura || !leitura.leitura || !valorLeitura) return null;
+
+        const leituraAtual = parseInt(valorLeitura);
+        const leituraAnterior = parseInt(leitura.leitura);
+
+        return leituraAtual - leituraAnterior;
+    };
+
+    const consumo = calcularConsumo();
+
+    // Não renderiza nada durante SSR
+    if (!mounted) return null;
+
     return (
         <ProtectedRoute>
             <div className="min-h-screen bg-gray-50">
-                {/* Header simplificado e responsivo */}
-                <header className="bg-white shadow-sm sticky top-0 z-10 px-4 py-3">
-                    <div className="flex justify-between items-center">
+                {/* Header simplificado */}
+                <header className="bg-white shadow-sm px-3 py-2">
+                    <div className="max-w-4xl mx-auto flex justify-between items-center">
                         <button
                             onClick={() => router.push("/dashboard")}
-                            className="flex items-center text-gray-800"
+                            className="text-gray-800"
                         >
-                            <svg className="h-5 w-5 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M19 12H5M12 19l-7-7 7-7" />
-                            </svg>
-                            <span className="text-sm font-medium">Voltar</span>
+                            Voltar
                         </button>
-
-                        <h1 className="text-base font-medium text-gray-800">Atualizar Leitura</h1>
-
-                        <div className="w-5"></div> {/* Espaçador para manter o título centralizado */}
+                        <span className="text-base font-medium">Atualizar Leitura</span>
+                        <div></div>
                     </div>
                 </header>
 
                 {/* Conteúdo principal */}
-                <main className="p-4 max-w-md mx-auto">
-                    {loading ? (
-                        <div className="flex justify-center items-center py-8">
-                            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-                        </div>
-                    ) : error && !leitura ? (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
-                            {error}
-                        </div>
-                    ) : !leitura ? (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
-                            Leitura não encontrada
-                        </div>
-                    ) : (
-                        <div className="bg-white rounded-lg shadow p-4">
-                            {success ? (
-                                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
-                                    <div className="flex items-center">
-                                        <svg className="h-6 w-6 text-green-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-                                        </svg>
-                                        <p className="text-green-700 font-medium">Leitura atualizada com sucesso!</p>
+                <main className="p-3">
+                    <div className="max-w-4xl mx-auto">
+                        {loading ? (
+                            <div className="flex justify-center items-center p-4">
+                                Carregando...
+                            </div>
+                        ) : error && !leitura ? (
+                            <div className="p-3 bg-red-50 border border-red-200 rounded text-red-600 text-sm">
+                                {error}
+                            </div>
+                        ) : !leitura ? (
+                            <div className="p-3 bg-red-50 border border-red-200 rounded text-red-600 text-sm">
+                                Leitura não encontrada
+                            </div>
+                        ) : (
+                            <div className="bg-white rounded border border-gray-200 p-3">
+                                {success ? (
+                                    <div className="p-3 bg-green-50 border border-green-200 rounded text-green-600 text-sm">
+                                        Leitura atualizada com sucesso!
                                     </div>
-                                    <p className="mt-2 text-sm text-green-600">Redirecionando para o dashboard...</p>
-                                </div>
-                            ) : (
-                                <>
-                                    {/* Informações da leitura */}
-                                    <div className="mb-4 pb-4 border-b border-gray-100">
-                                        <h2 className="text-sm font-medium text-gray-500 mb-1">Informações da unidade</h2>
-                                        <div className="flex justify-between">
-                                            <p className="text-base font-medium">
+                                ) : (
+                                    <>
+                                        {/* Informações detalhadas */}
+                                        <div className="mb-4 pb-3 border-b border-gray-100">
+                                            <h3 className="text-base font-medium mb-2">
                                                 {leitura.medidor_unidade_id.unidade_id.tipo_de_unidade} {leitura.medidor_unidade_id.unidade_id.numero_da_unidade}
-                                            </p>
-                                            <p className="text-base font-medium">
-                                                {leitura.medidor_unidade_id.unidade_id.bloco}
-                                            </p>
-                                        </div>
-                                    </div>
+                                            </h3>
 
-                                    {/* Formulário de atualização */}
-                                    <form onSubmit={handleSubmit}>
-                                        {error && (
-                                            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
-                                                {error}
-                                            </div>
-                                        )}
-
-                                        {/* Input para leitura do medidor */}
-                                        <div className="mb-4">
-                                            <label htmlFor="leitura" className="block text-sm font-medium text-gray-700 mb-1">
-                                                Leitura do medidor (m³)
-                                            </label>
-                                            <input
-                                                type="number"
-                                                id="leitura"
-                                                value={valorLeitura}
-                                                onChange={(e) => setValorLeitura(e.target.value)}
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                                                placeholder="Digite o valor da leitura"
-                                                required
-                                            />
-                                        </div>
-
-                                        {/* Upload de foto */}
-                                        <div className="mb-4">
-                                            <label className="block text-sm font-medium text-gray-700 mb-1">
-                                                Foto do medidor
-                                            </label>
-
-                                            {previewFoto ? (
-                                                <div className="mt-2 relative">
-                                                    <img
-                                                        src={previewFoto}
-                                                        alt="Preview"
-                                                        className="w-full h-48 object-cover rounded-lg"
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        onClick={handleRemoveFoto}
-                                                        className="absolute top-2 right-2 bg-red-600 text-white rounded-full p-1"
-                                                    >
-                                                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                            <path d="M6 18L18 6M6 6l12 12" />
-                                                        </svg>
-                                                    </button>
+                                            <div className="grid grid-cols-2 gap-2 text-sm">
+                                                <div>
+                                                    <span className="text-gray-600">Bloco:</span>{" "}
+                                                    <span className="font-medium">{leitura.medidor_unidade_id.unidade_id.bloco || "N/A"}</span>
                                                 </div>
-                                            ) : (
-                                                <div
-                                                    onClick={() => fileInputRef.current.click()}
-                                                    className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer hover:border-blue-500"
-                                                >
-                                                    <div className="space-y-1 text-center">
-                                                        <svg
-                                                            className="mx-auto h-12 w-12 text-gray-400"
-                                                            stroke="currentColor"
-                                                            fill="none"
-                                                            viewBox="0 0 48 48"
-                                                        >
-                                                            <path
-                                                                d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
-                                                                strokeWidth="2"
-                                                                strokeLinecap="round"
-                                                                strokeLinejoin="round"
-                                                            />
-                                                        </svg>
-                                                        <div className="flex text-sm text-gray-600">
-                                                            <label
-                                                                htmlFor="file-upload"
-                                                                className="relative cursor-pointer bg-white rounded-md font-medium text-blue-600 hover:text-blue-500 focus-within:outline-none"
-                                                            >
-                                                                <span>Carregar arquivo</span>
-                                                                <input
-                                                                    id="file-upload"
-                                                                    name="file-upload"
-                                                                    type="file"
-                                                                    className="sr-only"
-                                                                    ref={fileInputRef}
-                                                                    accept="image/*"
-                                                                    onChange={handleFileChange}
-                                                                />
-                                                            </label>
-                                                            <p className="pl-1">ou arraste e solte</p>
-                                                        </div>
-                                                        <p className="text-xs text-gray-500">PNG, JPG, JPEG até 10MB</p>
+                                                <div>
+                                                    <span className="text-gray-600">Medidor:</span>{" "}
+                                                    <span className="font-medium">{leitura.medidor_unidade_id.codigo_do_medidor || "N/A"}</span>
+                                                </div>
+                                                <div>
+                                                    <span className="text-gray-600">Última leitura:</span>{" "}
+                                                    <span className="font-medium">{leitura.leitura || "0"} m³</span>
+                                                </div>
+                                                <div>
+                                                    <span className="font-medium">Data da leitura:</span> {formatarData(leitura.data_da_leitura)}
+                                                </div>
+                                                {leitura.data_da_proxima_leitura && (
+                                                    <div className="col-span-2">
+                                                        <span className="text-gray-600">Próxima leitura:</span>{" "}
+                                                        <span className="font-medium">{formatarData(leitura.data_da_proxima_leitura)}</span>
                                                     </div>
-                                                </div>
-                                            )}
+                                                )}
+                                            </div>
                                         </div>
 
-                                        {/* Botão de envio */}
-                                        <button
-                                            type="submit"
-                                            disabled={enviando}
-                                            className="w-full flex justify-center items-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
-                                        >
-                                            {enviando ? (
-                                                <>
-                                                    <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white mr-2"></div>
-                                                    Enviando...
-                                                </>
-                                            ) : (
-                                                "Confirmar leitura"
+                                        {/* Formulário */}
+                                        <form onSubmit={handleSubmit}>
+                                            {error && (
+                                                <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded text-red-600 text-sm">
+                                                    {error}
+                                                </div>
                                             )}
-                                        </button>
-                                    </form>
-                                </>
-                            )}
-                        </div>
-                    )}
+
+                                            {/* Input de leitura */}
+                                            <div className="mb-3">
+                                                <label htmlFor="leitura" className="block text-sm font-medium text-gray-700 mb-1">
+                                                    Leitura atual do medidor (m³)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    id="leitura"
+                                                    value={valorLeitura}
+                                                    onChange={(e) => setValorLeitura(e.target.value)}
+                                                    className="w-full rounded border border-gray-300 p-2"
+                                                    placeholder="Digite o valor"
+                                                    required
+                                                />
+                                            </div>
+
+                                            {/* Exibição do consumo calculado */}
+                                            {consumo !== null && (
+                                                <div className="mb-3 p-2 bg-blue-50 border border-blue-200 rounded-md">
+                                                    <p className="text-sm text-blue-700">
+                                                        <span className="font-medium">Consumo calculado:</span> {consumo} m³
+                                                    </p>
+                                                </div>
+                                            )}
+
+                                            {/* Campo de observações */}
+                                            <div className="mb-3">
+                                                <label htmlFor="observacao" className="block text-sm font-medium text-gray-700 mb-1">
+                                                    Observações (opcional)
+                                                </label>
+                                                <textarea
+                                                    id="observacao"
+                                                    rows="2"
+                                                    value={observacao}
+                                                    onChange={(e) => setObservacao(e.target.value)}
+                                                    className="w-full rounded border border-gray-300 p-2"
+                                                    placeholder="Observações sobre a leitura"
+                                                ></textarea>
+                                            </div>
+
+                                            {/* Upload de foto */}
+                                            <div className="mb-3">
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                    Foto do medidor
+                                                </label>
+
+                                                {previewFoto ? (
+                                                    <div className="relative">
+                                                        <img
+                                                            src={previewFoto}
+                                                            alt="Preview"
+                                                            className="w-full h-40 object-cover rounded border border-gray-200"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleRemoveFoto}
+                                                            className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1 w-6 h-6 flex items-center justify-center"
+                                                        >
+                                                            X
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <div
+                                                        onClick={() => fileInputRef.current?.click()}
+                                                        className="p-3 border border-gray-300 border-dashed rounded text-center cursor-pointer"
+                                                    >
+                                                        <p className="text-sm text-gray-600">Clique para selecionar foto</p>
+                                                        <input
+                                                            type="file"
+                                                            className="hidden"
+                                                            ref={fileInputRef}
+                                                            accept="image/*"
+                                                            onChange={handleFileChange}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {/* Botão de envio */}
+                                            <div className="mt-4">
+                                                <button
+                                                    type="submit"
+                                                    disabled={enviando}
+                                                    className="w-full py-2 px-4 border border-transparent rounded text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                                                >
+                                                    {enviando ? "Enviando..." : "Confirmar leitura"}
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 </main>
             </div>
         </ProtectedRoute>

@@ -6,10 +6,13 @@ import apiClient from "./axios";
  */
 export const getLeiturasPendentes = async () => {
     try {
+        const leiturasEndpoint = process.env.NEXT_PUBLIC_LEITURAS_UNIDADES_ENDPOINT;
+        const statusPendente = process.env.NEXT_PUBLIC_STATUS_PENDENTE;
+
         // Busca leituras com status = pendente
-        const response = await apiClient.get("/items/leituras_unidades", {
+        const response = await apiClient.get(leiturasEndpoint, {
             params: {
-                filter: { status: { _eq: "pendente" } },
+                filter: { status: { _eq: statusPendente } },
                 sort: ["-date_created"],
             },
         });
